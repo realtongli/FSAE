@@ -1,0 +1,16 @@
+# data, third-party checkouts, model weights and run outputs are not part of the repository
+/data/
+/third_party/
+/weights/
+/results/
+/logs/
+/paper/figs/
+/paper/tables/
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vscode/
+.idea/
+*.log
