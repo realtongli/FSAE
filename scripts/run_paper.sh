@@ -134,6 +134,7 @@ done
 $P scripts/robust_assistant_knn.py --stage run          # nearest neighbour on the first ten packets, every condition above
 $P scripts/adv_transfer.py                              # does the shaping transfer to LightGBM and the nearest neighbour?
 $P scripts/whole_connection_defences.py --tamaraw_published 100,1000        # FRONT / Tamaraw over whole connections
+$P scripts/front_whole_published.py                     # FRONT over whole connections with the published dummy budgets
 
 # ---------------------------------------------------------------- 5. open world
 for K in 2 4 8; do for bg in 0 1; do
@@ -147,6 +148,22 @@ for v in dilA dilB dilC; do for K in 1 2 4; do for s in $SEEDS; do
   ours meta_ssl_mpm_XL_$v fs${K}_sslXL${v}_s$s --seed $s --split configs/splits/fewshot_k${K}_s$s.json $G
   ours meta_ssl_mpm_XL_$v ccma_fs${K}_sslXL${v}_s$s --seed $s --split configs/splits/ccma_fewshot_k${K}_s$s.json $C
 done; done; done
+# encoder size and use of pre-training (CCMA, K = 4): encoders of 0.14M and 0.8M parameters, and a linear probe on the
+# frozen 2.4M encoder (scripts/encoder_ablation.py)
+[ -f weights/meta_ssl_mpm.pt ] || $P src/pretrain_meta.py --epochs 200 --d 64 --layers 4 --heads 4 --ff 128 --name meta_ssl_mpm
+[ -f weights/meta_ssl_mpm_L.pt ] || $P src/pretrain_meta.py --epochs 300 --d 128 --layers 6 --heads 8 --ff 256 --name meta_ssl_mpm_L
+for s in $SEEDS; do
+  SC4="--seed $s --split configs/splits/ccma_fewshot_k4_s$s.json $C"
+  ours meta_ssl_mpm ccma_fs4_ssl_ft_lr3e4_s$s $SC4
+  ours meta_ssl_mpm_L ccma_fs4_sslL_ft_lr3e4_s$s $SC4
+  $P src/train_meta_ssl.py --tag main --mode probe --lr 1e-3 --epochs 60 --bs 64 --drop_head 0.3 --init weights/meta_ssl_mpm_XL.pt --run_name ccma_fs4_sslXL_probe_s$s $SC4
+done
+$P scripts/encoder_ablation.py
+# pre-training on the other campaign only, so that the encoder never saw traffic of the target apps (K = 2, 4, 8)
+for K in 2 4 8; do for s in $SEEDS; do
+  ours meta_ssl_mpm_XL_ccmaonly fs${K}_sslXLxc_s$s --seed $s --split configs/splits/fewshot_k${K}_s$s.json $G
+  ours meta_ssl_mpm_XL_genaionly ccma_fs${K}_sslXLxc_s$s --seed $s --split configs/splits/ccma_fewshot_k${K}_s$s.json $C
+done; done
 
 # ---------------------------------------------------------------- 7. the six primary comparisons over 20 draws
 # Draws 0-4 are the runs of block 2; scripts/make_splits_draws20.py writes the K-session draws 5-19. Draw r uses the
@@ -166,3 +183,37 @@ for r in $(seq 1 19); do
   done
 done
 $P scripts/draws20_primary.py
+
+# ---------------------------------------------------------------- 8. third evaluation set (nine MIRAGE-AppAct-2024 apps absent from CCMA)
+# scripts/appact_wrap.py runs the trainers above unchanged on this set and keeps its records apart: results/appact/
+# metrics_appact.jsonl, results/appact/locked_test_metrics_appact.jsonl and results/appact/runs/<run id>/.
+# Encoder T pre-trains on the main corpus plus the unlabelled training and validation connections of the nine apps, for the
+# optimiser steps of the main encoder; encoder X is the main encoder of block 1, which never saw these apps.
+# K = 1, 2: 20 draws with pre-training seed r mod 3; K = 4, 8: 5 draws. Statistics: scripts/appact_primary.py.
+$P scripts/appact_leakcheck.py || exit 1
+W=scripts/appact_wrap.py
+FTA="--first_k 64 --mode ft --epochs 60 --bs 64 --lr 0.001 --lr_enc 0.0003 --drop_head 0.3 --channels all --defense none --defense_train 0 --adv_train 0 --adv_bytes 256 --adv_ms 50 --adv_steps 5"
+pa() { [ -f weights/$1.pt ] || $P $W pretrain --first_k 64 --d 192 --layers 8 --heads 8 --ff 384 --mask_ratio 0.4 --epochs 400 --bs 256 --lr 0.001 --steps_like 28394 --datasets genai,ccma,appact --name "$@"; }
+fa() { $P $W ft --run_name $1 --seed $2 --split configs/splits/$3 --dataset appact --target app --tag appact $FTA "${@:4}"; }
+la() { LGBM_ROUNDS=$R $P $W lgbm --which lgbm --tag appact --dataset appact --target app --name $1 --seeds $2 --split configs/splits/$3; }
+for p in 0 1 2; do pa meta_ssl_mpm_XL_appact_ps$p --seed $p; done
+for r in $(seq 0 19); do
+  p=$((r % 3)); X=weights/meta_ssl_mpm_XL.pt; [ $p -ne 0 ] && X=weights/meta_ssl_mpm_XL_ps$p.pt
+  KS="1 2"; [ $r -lt 5 ] && KS="1 2 4 8"
+  for K in $KS; do S=appact_fewshot_k${K}_s$r.json
+    fa appact_fs${K}_sslXLT_d${r}_p$p $r $S --init weights/meta_ssl_mpm_XL_appact_ps$p.pt
+    fa appact_fs${K}_sslscratchXL_d$r $r $S --init "" --arch 192,8,8,384 --norm_ckpt weights/meta_ssl_mpm_XL_appact_ps0.pt
+    fa appact_fs${K}_sslXLX_d${r}_p$p $r $S --init $X
+    la appact_fs$K $r $S
+  done
+done
+# unseen phone: one pre-training per held-out phone (seed 0) on a corpus without any session of that phone, K = 4, draws 0-4
+pa meta_ssl_mpm_XL_appact_xcd1e --seed 0 --exclude appact:configs/splits/appact_cdexcl_1e.json
+pa meta_ssl_mpm_XL_appact_xcd2c --seed 0 --exclude appact:configs/splits/appact_cdexcl_2c.json,ccma:configs/splits/ccma_cd_2c_k4_s0.json
+pa meta_ssl_mpm_XL_appact_xcdf4 --seed 0 --exclude appact:configs/splits/appact_cdexcl_f4.json,ccma:configs/splits/ccma_cd_f4_k4_s0.json
+for d in 1e 2c f4; do for r in 0 1 2 3 4; do S=appact_cd_${d}_k4_s$r.json
+  fa appact_cd${d}_k4_sslXLT_d${r}_p0 $r $S --init weights/meta_ssl_mpm_XL_appact_xcd$d.pt
+  fa appact_cd${d}_k4_sslscratchXL_d$r $r $S --init "" --arch 192,8,8,384 --norm_ckpt weights/meta_ssl_mpm_XL_appact_xcd$d.pt
+  la appact_cd${d}_k4 $r $S
+done; done
+$P scripts/appact_primary.py
