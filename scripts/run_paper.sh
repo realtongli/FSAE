@@ -63,6 +63,7 @@ for s in $SEEDS; do for K in 1 2 4 8; do
   $P src/train_yatc.py --tag main --run_name ccma_fs${K}_yatc_pre_s$s $Y $SC
   $P src/train_etbert.py --tag main --run_name fs${K}_etbert_s$s --seed $s --split configs/splits/fewshot_k${K}_s$s.json
 done; done
+$P scripts/trivial_baselines.py                         # nearest neighbour on the first ten packets (training-free), K = 1, 2, 4, 8, draws 0-4
 
 # ---------------------------------------------------------------- 3. label age (temporal splits) and unseen phone
 for s in $SEEDS; do for K in 2 4 8; do
@@ -133,7 +134,8 @@ for s in $SEEDS; do
 done
 $P scripts/robust_assistant_knn.py --stage run          # nearest neighbour on the first ten packets, every condition above
 $P scripts/adv_transfer.py                              # does the shaping transfer to LightGBM and the nearest neighbour?
-$P scripts/whole_connection_defences.py --tamaraw_published 100,1000        # FRONT / Tamaraw over whole connections
+$P scripts/whole_connection_defences.py                 # FRONT / Tamaraw over whole connections and the flow-record observer
+$P scripts/whole_connection_defences.py --tamaraw_published 100,1000        # Tamaraw at its published configuration (reads the run above)
 $P scripts/front_whole_published.py                     # FRONT over whole connections with the published dummy budgets
 
 # ---------------------------------------------------------------- 5. open world

@@ -76,15 +76,16 @@ mkdir -p data third_party weights results paper/tables paper/figs
 | MIRAGE-2019 (only for the mixed pre-training corpora) | keep the archive as `data/MIRAGE-2019_v2.tar.gz` |
 | MIRAGE-AppAct-2024 | keep the archive as `data/MIRAGE-AppAct-2024.zip` |
 
-**Third-party code and weights**, only needed for the corresponding references (the YaTC checkout is also needed by
-the nearest neighbour, `scripts/trivial_baselines.py`, which shares a metric helper with `src/train_yatc.py`, and by the
-analyses that import it):
+**Third-party code and weights.** Check out Medformer and YaTC before running anything. `src/train_meta.py`, which
+the pre-training, the encoder, LightGBM and most analyses import, loads Medformer's model file and imports
+`src/train_yatc.py`, which loads a helper from YaTC; the nearest neighbour (`scripts/trivial_baselines.py`) imports
+`src/train_yatc.py` too. The ET-BERT checkout and the released weights are needed only for the corresponding references.
 
-| observer | checkout | weights |
-|---|---|---|
-| patch Transformer | `third_party/Medformer` (DL4mHealth/Medformer, commit `891f65b`) | none |
-| YaTC | `third_party/YaTC` (NSSL-SJTU/YaTC, commit `a220b75`) | released pre-trained model as `weights/yatc_pretrained-model.pth` |
-| ET-BERT | `third_party/ET-BERT` (linwhitehat/ET-BERT, commit `d594706`) | released pre-trained model as `weights/etbert_pretrained_model.bin` |
+| code | checkout | needed by | weights |
+|---|---|---|---|
+| Medformer | `third_party/Medformer` (DL4mHealth/Medformer, commit `891f65b`) | every metadata observer, the pre-training and most analyses | none |
+| YaTC | `third_party/YaTC` (NSSL-SJTU/YaTC, commit `a220b75`) | every metadata observer, the pre-training and most analyses | YaTC reference only: released pre-trained model as `weights/yatc_pretrained-model.pth` |
+| ET-BERT | `third_party/ET-BERT` (linwhitehat/ET-BERT, commit `d594706`) | ET-BERT reference only | released pre-trained model as `weights/etbert_pretrained_model.bin` |
 
 ## Pipeline
 
@@ -111,7 +112,7 @@ CKPT_SELECT=last python src/train_meta_ssl.py --run_name fs4_sslXL_s0 --tag main
     --init weights/meta_ssl_mpm_XL.pt --mode ft --lr 1e-3 --lr_enc 3e-4 --epochs 60 --bs 64 --drop_head 0.3
 
 # LightGBM on the same sessions
-LGBM_ROUNDS=1600 python scripts/train_baselines.py --which lgbm --seeds 0 \
+CKPT_SELECT=last LGBM_ROUNDS=1600 python scripts/train_baselines.py --which lgbm --seeds 0 \
     --split configs/splits/fewshot_k4_s0.json --dataset genai --target joint --name fs4 --tag main
 
 # the nearest neighbour on the first ten packets (training-free): both campaigns, K = 1, 2, 4, 8, draws 0-4
@@ -120,9 +121,9 @@ python scripts/trivial_baselines.py
 
 `scripts/run_paper.sh` lists every training run behind the paper's tables and figures in this form: all K, five
 K-session draws, both campaigns, temporal and unseen-phone splits, defences, open world, the 20-draw primary
-comparisons, and in its last block AppAct through `scripts/appact_wrap.py`. The training-free nearest neighbour runs
-through `scripts/trivial_baselines.py` on the K-session draws and through `scripts/robust_assistant_knn.py --stage run`
-on the drift, unseen-phone and defence settings.
+comparisons, and in its last block AppAct through `scripts/appact_wrap.py`. It also runs the training-free nearest
+neighbour: `scripts/trivial_baselines.py` on the K-session draws and `scripts/robust_assistant_knn.py --stage run` on the
+drift, unseen-phone and defence settings.
 
 ### Protocol
 
